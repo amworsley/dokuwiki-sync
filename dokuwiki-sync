@@ -1,0 +1,336 @@
+#! /bin/sh
+
+# Copyright (C) 2017 Andrew Worsley 
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# Directory where user data is kept - in pages subdirectory
+DAT_DIR="/var/lib/dokuwiki/data"
+# Page data
+DFILE="pages"
+# Media data
+MFILE="media"
+UDAT_DIR="$DAT_DIR/$DFILE"
+
+# Temporary file for backup
+TFILE=/tmp/$DFILE-$$.tgz
+
+usage()
+{
+   echo "$(basename $0): Back up dokiwiki directory to temporary file"
+   echo ""
+   echo "-n : Dry-run print commands instead of executing them"
+   echo "-x : Enabling tracing of shell script"
+   echo "-h : Print this information"
+   echo "-v : verbose mode - print out names of changed files"
+   echo 
+   echo "backup <data> <tfile> - Backup directory <data> into a tar file <tfile>"
+   echo "  tar file is created as root to preserve ownership/dates"
+   echo "restore <tfile> <dir> - Restore tar file <tfile> inside directory <dir>"
+   echo "   files created as user, will create the directory if it doesn't already exist"
+   echo "git-init <d> <msg> - Create a git repository in directory <d> and commit it with"
+   echo "   message <m>"
+   echo "git-clone <rep> <new> - git clone repository <rep> into new repository <new>"
+   echo "   will create directories in <new> if they don't exist"
+   echo "git-diff <rep> - Perform a git diff in a git repository <rep>"
+   echo "git-status <rep> - Perform a git status in a git repository <rep>"
+   echo "git-commit <rep> <msg> - Perform a git commit in a git repository <rep>"
+   echo "  with commit log <msg>. All new files are added before the commit"
+   echo "rsync-diff <d1> <d2> - prints itemized list of files changed from <d1> to <d2>"
+   echo "rsync-update <d1> <d2> - rsync update changes from <d1> into <d2>"
+   echo "diff-summary <d1> <d2> - prints summary of changes between directories <d1> and <d2>"
+}
+
+# Back up data to tar file
+bkup_dat ()
+{
+    D=${1:-"$UDAT_DIR"}
+    T=${2:-"$TFILE"}
+    O=${3:-"$MFILE"}
+
+    echo "Backing up $D $O into $T"
+    $DR sudo tar -C $(dirname $D) -zcf $T $(basename $D) $O
+}
+
+# Restore backup into a directory
+restore_dat ()
+{
+    T=${1:-"$TFILE"}
+    D=${2:-"/tmp/$DFILE-D$$"}
+
+    if [ ! -r $T ]; then
+        echo "Unable to read tarfile file : $T"
+        exit 1
+    fi
+    if [ ! -d $D ]; then
+        echo "Creating $D"
+        $DR mkdir -p $D
+    fi
+    echo "Extracting into $D"
+    $DR tar -C $D -zxf $T
+}
+
+# Create a git repository from a directory
+git_init ()
+{
+    D=${1:-"/tmp/$DFILE"}
+    M="${2:-"Initial copy"}"
+
+    if [ ! -d $D ]; then
+        echo "Directory $T missing"
+        exit 1
+    fi
+    if [  -r $D/.git ]; then
+        echo "Aborting - $D already git repository"
+        return
+    fi
+    PWD=$(pwd)
+    $DR cd $D
+    $DR git init
+    $DR git add .
+    $DR git commit -m "$M"
+    $DR cd $PWD
+}
+
+
+# Clone a git repository from a directory to another
+git_clone ()
+{
+    R=${1:-"/tmp/$DFILE"}
+    N=${2:-"/tmp/clone$$"}
+
+    if [ ! -d $R/.git ]; then
+        echo "Aborting - $R not a git repository"
+        return
+    fi
+    B=$(dirname $N)
+    if [ ! -d $B ]; then
+         mkdir -p $B
+    fi
+    $DR git clone $R $N
+}
+# Perform a git diff in a given git repository
+git_diff ()
+{
+    R=${1:-"/tmp/$DFILE"}
+
+    if [ ! -d $R/.git ]; then
+        echo "Aborting - $R not a git repository"
+        return
+    fi
+    PWD=$(pwd)
+    $DR cd $R
+    $DR git diff
+    $DR cd $PWD
+}
+# Perform a git status in a given git repository
+git_status ()
+{
+    R=${1:-"/tmp/$DFILE"}
+
+    if [ ! -d $R/.git ]; then
+        echo "Aborting - $R not a git repository"
+        return
+    fi
+    PWD=$(pwd)
+    $DR cd $R
+    $DR git status
+    $DR cd $PWD
+}
+# Perform a git commit on repository
+git_commit ()
+{
+    R=${1:-"/tmp/$DFILE"}
+    M="${2:-"Initial copy"}"
+
+    if [ ! -d $R/.git ]; then
+        echo "Aborting - $R not a git repository"
+        return
+    fi
+    PWD=$(pwd)
+    $DR cd $R
+    $DR git add -u
+    $DR git commit -am "$M"
+    $DR cd $PWD
+}
+# prints itemized list of files changed in <d2> from <d2>
+rsync_diff ()
+{
+    S=${1:-"/tmp/macbook"}
+    D=${2:-"/tmp/azza"}
+
+    if [ ! -d $S ]; then
+        echo "Aborting - source directory $S missing"
+        return
+    fi
+    if [ ! -d $D ]; then
+        echo "Aborting - destination directory $D missing"
+        return
+    fi
+    $DR rsync -n -au -i --exclude=.git $S/ $D/
+}
+# use rsync update to push changes from d1 into d2
+rsync_update ()
+{
+    S=${1:-"/tmp/macbook"}
+    D=${2:-"/tmp/azza"}
+
+    if [ ! -d $S ]; then
+        echo "Aborting - source directory $S missing"
+        return
+    fi
+    if [ ! -d $D ]; then
+        echo "Aborting - destination directory $D missing"
+        return
+    fi
+    $DR rsync -au -i --exclude=.git $S/ $D/
+}
+# prints summary of changes between directories
+diff_summ ()
+{
+    D1=${1:-"/tmp/macbook"}
+    D2=${2:-"/tmp/azza"}
+    B1=$(basename $D1)
+    B2=$(basename $D2)
+    S1=/tmp/$B1-$$.diff1
+    S2=/tmp/$B2-$$.diff2
+
+    if [ ! -d $D1 ]; then
+        echo "Aborting - directory $D1 missing"
+        return
+    fi
+    if [ ! -d $D2 ]; then
+        echo "Aborting - directory $D2 missing"
+        return
+    fi
+    if [ $DR ]; then
+        echo rsync_diff $D1 $D2 \> $S1
+        echo "U1=\$(awk '/^>/ { files++ } END { printf("%d\n", files) }' $S1)"
+        U1="0"
+    else
+        rsync_diff $D1 $D2 > $S1
+        U1=$(awk '/^>/ { files++ } END { printf("%d\n", files) }' $S1)
+    fi
+    if [ $DR ]; then
+        echo rsync_diff $D2 $D1 \> $S2
+        echo "U2=\$(awk '/^>/ { files++ } END { prinf("%d\n", files) }' $S2)"
+        U2="0"
+    else
+        rsync_diff $D2 $D1 > $S2
+        U2=$(awk '/^>/ { files++ } END { printf("%d\n", files) }' $S2)
+    fi
+    $DR awk '/^>/ { files++; changed[$2]++; if (changed[$2] > 1) conflict[nconflict++] = $f }
+            END { if (nconflict > 0) {
+                   printf("%d conflicts\n", nconflict)
+                   for (i = 0; i < nconflict; i++)
+                       printf("%3d : %s\n", i, $conflict[i])
+                  }
+                  else
+                      print "No conflicts"
+               }' $S1 $S2
+    if [ ! $VERBOSE ]; then
+        $DR rm -f $S1 $S2
+        if [ $U1 -eq 0 -a $U2 -eq 0 ]; then
+            echo "No updates found"
+        else
+            if [ $U1 -gt 0 ]; then
+                $DR echo "$U1 updates in $D1"
+            fi
+            if [ $U2 -gt 0 ]; then
+                $DR echo "$U2 updates in $D2"
+            fi
+        fi
+    else
+        if [ -z $S1 ]; then
+            $DR echo "No updates in $D1"
+        else
+            $DR echo "$U1 updates in $D1"
+            $DR cat $S1
+        fi
+        if [ -z $S2 ]; then
+            $DR echo "No updates in $D2"
+        else
+            $DR echo "$U2 updates in $D2"
+            $DR cat $S2
+        fi
+    fi
+
+}
+while getopts 'nxhv' argv
+do
+    case $argv in
+    v)
+       VERBOSE=1
+    ;;
+    h)
+       usage
+       exit 0
+    ;;
+    n)
+       echo "Dry-Run Mode:"
+       DR=echo
+    ;;
+    x)
+        echo "Enabling tracing"
+        set -x
+    ;;
+    esac
+done
+
+shift $(($OPTIND-1))
+
+case $1 in
+backup)
+    bkup_dat $2 $3
+    exit 0
+    ;;
+restore)
+    restore_dat $2 $3
+    exit 0
+    ;;
+git-init)
+    git_init $2 "$3"
+    exit 0
+    ;;
+git-clone)
+    git_clone $2 $3
+    exit 0
+    ;;
+git-diff)
+    git_diff $2
+    exit 0
+    ;;
+git-status)
+    git_status $2
+    exit 0
+    ;;
+git-commit)
+    git_commit $2 "$3"
+    exit 0
+    ;;
+rsync-diff)
+    rsync_diff $2 $3
+    exit 0
+    ;;
+rsync-update)
+    rsync_update $2 $3
+    exit 0
+    ;;
+diff-summary)
+    diff_summ $2 $3
+    exit 0
+    ;;
+*)
+    echo "Unknown Command $1:"
+    usage
+esac
+
+
